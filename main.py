@@ -2,7 +2,7 @@ import discord
 from dotenv import load_dotenv
 import os
 import bot_config
-import update
+import updater
 
 config = bot_config.config
 applications = bot_config.applications
@@ -13,7 +13,13 @@ bot = discord.Bot()
 
 os.system('cls')
 print("Starting bot...")
-onLatest = update.check(version)
+if config['auto_update']:
+    print("Checking for updates...")
+    onLatest = updater.check(version, "main")
+    onLatestConfig = updater.check(bot_config.version, "bot_config")
+    onLatestUpdater = updater.check(updater.updater_version, "updater")
+else:
+    onLatest = True
 
 bot = discord.Bot()
 load_dotenv('.env')
@@ -64,6 +70,9 @@ class ApplyButton(discord.ui.View):
         if message.embeds:
             embed_title = message.embeds[0].title
             application = embed_title.replace(" Application", "")
+            if not canApply(message.guild, interaction.user, application):
+                await interaction.response.send_message(f"You have reached the maximum amount of {application} Applications.", ephemeral=True)
+                return
             if applications[application]['enabled']:
                 await interaction.response.send_modal(ApplicationModal(title=embed_title, application_questions=applications[application]['questions']))
             else:
@@ -103,6 +112,19 @@ class DeleteButton(discord.ui.View):
     async def button_callback(self, button, interaction):
         await interaction.channel.delete()
 
+def canApply(guild: discord.Guild, user: discord.User, application_name: str):
+    max = applications[application_name]['max_applications']
+    application_name = application_name.lower()
+    if max == 0:
+        return True
+    catagory = guild.get_channel(config['application_catagory'])
+    channels = catagory.channels
+    user_applications = 0
+    for channel in channels:
+        if channel.name.startswith(f"{user.name}-{application_name}"):
+            user_applications += 1
+    return not user_applications >= max
+
 @bot.event
 async def on_ready():
     os.system('cls')
@@ -135,15 +157,31 @@ if config['apply_command']:
     @bot.slash_command(name="apply", description="Start the application.")
     @discord.option(name="application", description="Which application do you want to start?", required=True, choices=application_choices)
     async def apply(ctx: discord.ApplicationContext, application: str):
-        if ctx.author.guild_permissions.manage_guild:
-            application_questions = applications.get(application, {}).get("questions", {})
-            modal = ApplicationModal(title=f"{application} Application", application_questions=application_questions)
+        print(canApply(ctx.guild, ctx.author, application))
+        if not canApply(ctx.guild, ctx.author, application):
+            await ctx.respond(f"You have reached the maximum amount of {application} Applications.", ephemeral=True)
+            return
+        application_questions = applications.get(application, {}).get("questions", {})
+        modal = ApplicationModal(title=f"{application} Application", application_questions=application_questions)
 
-            await ctx.send_modal(modal)
-        else:
-            await ctx.respond("You do not have permission to use this command.", ephemeral=True)
+        await ctx.send_modal(modal)
 
-if onLatest:
+if onLatest and onLatestConfig and onLatestUpdater:
     bot.run(os.getenv('TOKEN'))
 else:
-    update.update()
+    doupdate = None
+    while doupdate != 'y' or 'n':
+        doupdate = input("Would you like to automatically update? (y/n): ")
+        if doupdate == 'y':
+            if not onLatestConfig:
+                updater.update('bot_config')
+            if not onLatestUpdater:
+                updater.update('updater')
+            if not onLatest:
+                updater.update('main')
+            break
+        elif doupdate == 'n':
+            print("Continuing start... (This may cause errors)")
+            bot.run(os.getenv('TOKEN'))
+        else:
+            continue
